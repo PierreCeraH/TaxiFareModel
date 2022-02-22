@@ -5,7 +5,12 @@ from sklearn.preprocessing import StandardScaler, RobustScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeRegressor
+import joblib
 
+from memoized_property import memoized_property
+import mlflow
+from  mlflow.tracking import MlflowClient
 
 from TaxiFareModel.encoders import DistanceTransformer, TimeFeaturesEncoder
 from TaxiFareModel.utils import compute_rmse, haversine_vectorized
@@ -20,6 +25,8 @@ class Trainer():
         self.pipeline = None
         self.X = X
         self.y = y
+        self.experiment_name = "[FR] [Paris] [Joe le Taxi] Model LinearRegression v1"
+
 
     def holdout(self, X, y):
         """using train test split of Sklearn to split the data
@@ -52,7 +59,7 @@ class Trainer():
         # Global pipeline
         pipeline = Pipeline([
             ('preproc', preproc_pipe),
-            ('model', LinearRegression())
+            ('model', DecisionTreeRegressor())
         ])
 
         self.pipeline = pipeline
@@ -70,6 +77,38 @@ class Trainer():
 
         return compute_rmse(y_pred, y_test)
 
+
+    MLFLOW_URI = "https://mlflow.lewagon.co/"
+
+    @memoized_property
+    def mlflow_client(self):
+        MLFLOW_URI = "https://mlflow.lewagon.co/"
+        mlflow.set_tracking_uri(MLFLOW_URI)
+        return MlflowClient()
+
+    @memoized_property
+    def mlflow_experiment_id(self):
+        try:
+            return self.mlflow_client.create_experiment(self.experiment_name)
+        except BaseException:
+            return self.mlflow_client.get_experiment_by_name(self.experiment_name).experiment_id
+
+    @memoized_property
+    def mlflow_run(self):
+        return self.mlflow_client.create_run(self.mlflow_experiment_id)
+
+    def mlflow_log_param(self, key, value):
+        self.mlflow_client.log_param(self.mlflow_run.info.run_id, key, value)
+
+    def mlflow_log_metric(self, key, value):
+        self.mlflow_client.log_metric(self.mlflow_run.info.run_id, key, value)
+
+
+    def save_model(self):
+        """ Save the trained model into a model.joblib file """
+        joblib.dump(self.pipeline, 'model.joblib')
+
+
 if __name__ == "__main__":
     #get data
     df = get_data()
@@ -83,8 +122,13 @@ if __name__ == "__main__":
     # hold out
     X_train, X_test, y_train, y_test = my_trainer.holdout(X,y)
     # train
+
     my_trainer.set_pipeline()
     my_trainer.run(X_train, y_train)
     # evaluate
-    rmse = my_trainer.evaluate(X_test, y_test)
+    rmse = float(my_trainer.evaluate(X_test, y_test))
     print(f'RMSE final : {rmse}')
+
+    my_trainer.mlflow_log_param('Model', 'Linear')
+    my_trainer.mlflow_log_metric('rmse', rmse)
+    my_trainer.save_model()
